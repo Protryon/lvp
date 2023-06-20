@@ -1,0 +1,15 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: lvp-xfs
+provisioner: lvp
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+allowedTopologies:
+- matchLabelExpressions:
+  - key: node
+    values:
+    - ho.me
+parameters:
+  host_base_path: /pv2/
+  fs_type: xfs

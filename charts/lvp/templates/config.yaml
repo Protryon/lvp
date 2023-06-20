@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "lvp.fullname" . }}
+  labels:
+    app: lvp
+    {{- include "lvp.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    socket_path: /csi/csi.sock
+    node_id: {{ .Values.nodeId }}
+    database: /db/lvp.redb
+    host_prefix: /host/

@@ -1,0 +1,59 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "LeakSignal Helm Values",
+    "type": "object",
+    "properties": {
+      "podLabels": {
+        "description": "Additional labels for the pod",
+        "type": "object"
+      },
+      "podAnnotations": {
+        "description": "Additional annotations for the pod",
+        "type": "object"
+      },
+      "nodeSelector": {
+        "description": "Node selector for the pod",
+        "type": "object"
+      },
+      "affinity": {
+        "description": "Affinity rules for the pod",
+        "type": "object"
+      },
+      "topologySpreadConstraints": {
+        "description": "Topology spread constraints for the pod",
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      },
+      "tolerations": {
+        "description": "Tolerations for the pod",
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      },
+      "image": {
+        "description": "Docker image configuration",
+        "type": "object",
+        "properties": {
+          "repository": {
+            "description": "Docker image repository, defaults to leaksignal/leakagent",
+            "type": "string"
+          },
+          "tag": {
+            "description": "Docker image tag, defaults to Chart.AppVersion",
+            "type": "string"
+          }
+        }
+      },
+      "resources": {
+        "description": "Resource requests and limits",
+        "type": "object"
+      },
+      "databaseDir": { "type": "string" },
+      "nodeId": { "type": "string" },
+      "kubeletPath": { "type": "string" },
+      "enableSanity": { "type": "boolean" }
+    }
+  }

@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc
+  namespace: lvp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: lvp
+  resources:
+    requests:
+      storage: 3Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: lvp
+  name: test-pvc
+  labels:
+    app: test-pvc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-pvc
+  template:
+    metadata:
+      labels:
+        app: test-pvc
+    spec:
+      containers:
+      - name: test-pvc
+        image: debian:buster
+        command: ["/bin/sleep", "9999999"]
+        volumeMounts:
+          - name: test-pvc
+            mountPath: /test
+      volumes:
+      - name: test-pvc
+        persistentVolumeClaim:
+          claimName: test-pvc

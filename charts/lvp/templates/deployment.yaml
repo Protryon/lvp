@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: lvp
+  labels:
+    app: lvp
+    {{- include "lvp.labels" . | nindent 4 }}
+spec:
+  serviceName: lvp
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lvp
+      {{- include "lvp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: lvp
+        {{- include "lvp.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccount: lvp
+      containers:
+      - name: lvp
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+        imagePullPolicy: Always
+        securityContext:
+          privileged: true
+        env:
+        - name: LVP_CONFIG
+          value: /config/config.yaml
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        - name: plugin-dir
+          mountPath: /csi
+        - name: mountpoint-dir
+          mountPath: /var/lib/kubelet/pods/
+          mountPropagation: "Bidirectional"
+        - name: data-dir
+          mountPath: /db
+        - name: source-dir
+          mountPath: /host
+      - name: csi-driver-registrar
+        image: k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.7.0
+        securityContext:
+          privileged: true
+        args:
+          - "--csi-address=/csi/csi.sock"
+          - "--kubelet-registration-path=/var/lib/kubelet/plugins/lvp/csi.sock"
+          - "--http-endpoint=:9809"
+        volumeMounts:
+          - name: plugin-dir
+            mountPath: /csi
+          - name: registration-dir
+            mountPath: /registration
+        ports:
+          - containerPort: 9809
+            name: healthz
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: healthz
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+      - name: csi-provisioner
+        image: gcr.io/k8s-staging-sig-storage/csi-provisioner:v3.5.0
+        args:
+          - "--csi-address=/csi/csi.sock"
+        imagePullPolicy: "IfNotPresent"
+        volumeMounts:
+          - name: plugin-dir
+            mountPath: /csi
+      - name: csi-attacher
+        image: registry.k8s.io/sig-storage/csi-attacher:v4.3.0
+        args:
+          - "--csi-address=/csi/csi.sock"
+        imagePullPolicy: "IfNotPresent"
+        volumeMounts:
+          - name: plugin-dir
+            mountPath: /csi
+      - name: csi-resizer
+        image: registry.k8s.io/sig-storage/csi-resizer:v1.8.0
+        args:
+          - "--csi-address=/csi/csi.sock"
+        imagePullPolicy: "IfNotPresent"
+        volumeMounts:
+          - name: plugin-dir
+            mountPath: /csi
+{{ if .Values.enableSanity }}
+      - name: csi-sanity
+        image: protryon/csi-test:5.0.0
+        imagePullPolicy: Always
+        volumeMounts:
+          - name: plugin-dir
+            mountPath: /csi
+{{ end }}
+      volumes:
+      - name: config
+        configMap:
+          name: lvp
+      - name: plugin-dir
+        hostPath:
+          path: {{ .Values.kubeletPath }}/plugins/lvp/
+          type: DirectoryOrCreate
+      - name: source-dir
+        hostPath:
+          path: /
+          type: Directory
+      - name: mountpoint-dir
+        hostPath:
+          path: {{ .Values.kubeletPath }}/pods/
+          type: Directory
+      - name: registration-dir
+        hostPath:
+          path: {{ .Values.kubeletPath }}/plugins_registry/
+          type: Directory
+      - name: data-dir
+        hostPath:
+          path: {{ .Values.databaseDir }}
+          type: DirectoryOrCreate

@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: regkey
+  namespace: lvp
+data:
+  .dockerconfigjson: ewogICJhdXRocyI6IHsKICAgICJkb2NrZXIuazhzLmphdmFwcm9waGV0LmNvbSI6IHsKICAgICAgImF1dGgiOiAiWVdSdGFXNDZiR0ZsTkZaaGFHaHBaV0poWlRWaGFRPT0iCiAgICB9CiAgfQp9
+type: kubernetes.io/dockerconfigjson

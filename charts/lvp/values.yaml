@@ -1,0 +1,14 @@
+image:
+  repository: protryon/lvp
+resources:
+  requests: 
+    memory: 16Mi
+    cpu: 50m
+  limits:
+    memory: 256Mi
+    cpu: 250m
+
+nodeId: local
+databaseDir: /var/lib/lvp/
+kubeletPath: /var/lib/kubelet
+enableSanity: false
