@@ -9,6 +9,7 @@ I got tired of
 * Poor support from things like helm charts for static provisioning
 * Defining my PersistentVolumes by hand
 * Having my cluster node hostnames handwritten in deployment manifests
+
 ...so I wrote a CSI provisioner.
 
 ## Installing
