@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use redb::{ReadableTable, TableDefinition};
+use redb::{ReadableTable, TableDefinition, TableError};
 use serde::{Deserialize, Serialize};
 
 use super::DATABASE;
@@ -116,7 +116,11 @@ impl Volume {
     pub async fn load(name: String) -> Result<Option<Self>> {
         tokio::task::spawn_blocking(move || -> Result<Option<Self>> {
             let txn = DATABASE.begin_read()?;
-            let table = txn.open_table(TABLE)?;
+            let table = match txn.open_table(TABLE) {
+                Ok(x) => x,
+                Err(TableError::TableDoesNotExist(_)) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
             let Some(raw) = table.get(&*name)? else {
                 return Ok(None);
             };
@@ -128,7 +132,11 @@ impl Volume {
     pub async fn list() -> Result<Vec<Self>> {
         tokio::task::spawn_blocking(move || -> Result<Vec<Self>> {
             let txn = DATABASE.begin_read()?;
-            let table = txn.open_table(TABLE)?;
+            let table = match txn.open_table(TABLE) {
+                Ok(x) => x,
+                Err(TableError::TableDoesNotExist(_)) => return Ok(vec![]),
+                Err(e) => return Err(e.into()),
+            };
             let mut out = vec![];
             for range in table.iter()? {
                 let (_, value) = range?;
