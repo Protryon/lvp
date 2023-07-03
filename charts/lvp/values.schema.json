@@ -53,6 +53,7 @@
       },
       "databaseDir": { "type": "string" },
       "kubeletPath": { "type": "string" },
+      "pkiPath": { "type": "string" },
       "enableSanity": { "type": "boolean" }
     }
   }

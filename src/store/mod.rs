@@ -1,12 +1,15 @@
 mod volume;
 
-use redb::Database;
+use always_cell::AlwaysCell;
+use kube::Client;
 pub use volume::*;
+use anyhow::Result;
 
-use crate::config::CONFIG;
+pub static CLIENT: AlwaysCell<Client> = AlwaysCell::new(); 
 
-lazy_static::lazy_static! {
-    pub static ref DATABASE: Database = {
-        Database::create(&CONFIG.database).expect("failed to load database")
-    };
+pub async fn init_client() -> Result<()> {
+    let client = Client::try_default().await?;
+
+    AlwaysCell::set(&CLIENT, client);
+    Ok(())
 }

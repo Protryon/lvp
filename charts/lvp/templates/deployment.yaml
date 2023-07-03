@@ -58,6 +58,8 @@ spec:
           mountPath: /config
         - name: plugin-dir
           mountPath: /csi
+        - name: pki-dir
+          mountPath: {{ .Values.pkiPath }}
         - name: mountpoint-dir
           mountPath: {{ .Values.kubeletPath }}/pods/
           mountPropagation: "Bidirectional"
@@ -123,6 +125,10 @@ spec:
       - name: config
         configMap:
           name: lvp
+      - name: pki-dir
+        hostPath:
+          path: {{ .Values.pkiPath }}
+          type: DirectoryOrCreate
       - name: plugin-dir
         hostPath:
           path: {{ .Values.kubeletPath }}/plugins/lvp/

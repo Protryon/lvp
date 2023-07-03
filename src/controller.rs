@@ -1,7 +1,6 @@
-use std::{io::ErrorKind, os::fd::AsRawFd, path::Path};
+use std::path::Path;
 
 use log::{error, info};
-use tokio::{fs::File, process::Command};
 use tonic::{Request, Response, Status};
 
 use crate::{
@@ -70,54 +69,6 @@ pub fn parse_volume_capability(
     ))
 }
 
-async fn make_volume(path: &Path, size: u64, filesystem: Filesystem) -> std::io::Result<()> {
-    if tokio::fs::try_exists(path).await? {
-        return Err(std::io::Error::new(
-            ErrorKind::AlreadyExists,
-            "volume file already exists",
-        ));
-    }
-    if filesystem == Filesystem::Bind {
-        tokio::fs::create_dir_all(path).await?;
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let file = File::create(path).await?;
-    tokio::task::spawn_blocking(move || {
-        if unsafe { libc::ftruncate(file.as_raw_fd(), size as i64) } < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    })
-    .await??;
-    match filesystem {
-        Filesystem::Ext4 => {
-            let status = Command::new("mkfs.ext4").arg(path).spawn()?.wait().await?;
-            if !status.success() {
-                return Err(std::io::Error::new(
-                    ErrorKind::Other,
-                    &*format!("mkfs.ext4 exited with status {status}"),
-                ));
-            }
-        }
-        Filesystem::Xfs => {
-            let status = Command::new("mkfs.xfs").arg(path).spawn()?.wait().await?;
-            if !status.success() {
-                return Err(std::io::Error::new(
-                    ErrorKind::Other,
-                    &*format!("mkfs.xfs exited with status {status}"),
-                ));
-            }
-        }
-        Filesystem::Bind => unreachable!(),
-    }
-
-    Ok(())
-}
-
 #[async_trait::async_trait]
 impl Controller for ControllerService {
     async fn create_volume(
@@ -129,17 +80,18 @@ impl Controller for ControllerService {
         if request.name.is_empty() {
             return Err(Status::invalid_argument("missing name"));
         }
-        if let Some(requirements) = &request.accessibility_requirements {
-            for requirement in &requirements.requisite {
-                for (key, value) in &requirement.segments {
-                    if key != "node" || value != &*NODE {
-                        return Err(Status::resource_exhausted(
-                            "invalid accessibility_requirements, only allowed node=<node id>",
-                        ));
-                    }
-                }
-            }
-        }
+        // //TODO: what for this?
+        // if let Some(requirements) = &request.accessibility_requirements {
+        //     for requirement in &requirements.requisite {
+        //         for (key, value) in &requirement.segments {
+        //             if key != "node" || value != &*NODE {
+        //                 return Err(Status::resource_exhausted(
+        //                     "invalid accessibility_requirements, only allowed node=<node id>",
+        //                 ));
+        //             }
+        //         }
+        //     }
+        // }
 
         if request.volume_capabilities.is_empty() {
             return Err(Status::invalid_argument("no capabilities specified"));
@@ -199,7 +151,7 @@ impl Controller for ControllerService {
                 None => 1073741824, // 1 GiB
                 Some(capacity) => capacity.required_bytes as u64,
             },
-            assigned_node_id: NODE.clone(),
+            assigned_node_id: None,
             state: VolumeState::Open,
             published_readonly: false,
             published_config: None,
@@ -215,7 +167,7 @@ impl Controller for ControllerService {
         })?;
         match creation {
             VolumeCreation::AlreadyExists => {
-                let Some(existing) = store::Volume::load(new_volume.name.clone()).await.map_err(|e| {
+                let Some(existing) = store::Volume::load(&new_volume.name).await.map_err(|e| {
                     error!("failed to load volume for reconciliation: {e:#}");
                     Status::internal("internal failure")
                 })? else {
@@ -237,9 +189,7 @@ impl Controller for ControllerService {
                         volume_context: Default::default(),
                         content_source: None,
                         accessible_topology: vec![Topology {
-                            segments: [("node".to_string(), new_volume.assigned_node_id)]
-                                .into_iter()
-                                .collect(),
+                            segments: new_volume.assigned_node_id.map(|x| [("node".to_string(), x)].into_iter().collect()).unwrap_or_default(),
                         }],
                     }),
                 }));
@@ -248,27 +198,6 @@ impl Controller for ControllerService {
         }
         //TODO: validate volume size?
 
-        let host_path = if new_volume.host_path.starts_with("/") {
-            &new_volume.host_path[1..]
-        } else {
-            &new_volume.host_path
-        };
-
-        let total_path = CONFIG.host_prefix.join(host_path);
-        info!("making new volume @ '{}'", total_path.display());
-        if let Err(e) = make_volume(&total_path, new_volume.size, filesystem).await {
-            error!(
-                "failed to make new volume file: {e:#} @ {}",
-                total_path.display()
-            );
-            new_volume.delete().await.map_err(|e| {
-                error!("failed to delete failed volume: {e:#}");
-                Status::internal("internal failure")
-            })?;
-
-            return Err(Status::internal("internal failure"));
-        }
-
         Ok(Response::new(CreateVolumeResponse {
             volume: Some(Volume {
                 capacity_bytes: new_volume.size as i64,
@@ -276,9 +205,7 @@ impl Controller for ControllerService {
                 volume_context: Default::default(),
                 content_source: None,
                 accessible_topology: vec![Topology {
-                    segments: [("node".to_string(), new_volume.assigned_node_id)]
-                        .into_iter()
-                        .collect(),
+                    segments: new_volume.assigned_node_id.map(|x| [("node".to_string(), x)].into_iter().collect()).unwrap_or_default(),
                 }],
             }),
         }))
@@ -294,7 +221,7 @@ impl Controller for ControllerService {
             return Err(Status::invalid_argument("missing volume_id"));
         }
 
-        let volume = store::Volume::load(request.volume_id).await.map_err(|e| {
+        let volume = store::Volume::load(&request.volume_id).await.map_err(|e| {
             error!("failed to load volume for deletion: {e:#}");
             Status::internal("internal failure")
         })?;
@@ -340,7 +267,7 @@ impl Controller for ControllerService {
             return Err(Status::invalid_argument("no capabilities specified"));
         }
 
-        let mut volume = match store::Volume::load(request.volume_id).await {
+        let mut volume = match store::Volume::load(&request.volume_id).await {
             Ok(Some(x)) => x,
             Ok(None) => return Err(Status::not_found("volume_id not found")),
             Err(e) => {
@@ -348,10 +275,10 @@ impl Controller for ControllerService {
                 return Err(Status::internal("internal failure"));
             }
         };
-        if volume.assigned_node_id != request.node_id {
+        if volume.assigned_node_id.is_some() && volume.assigned_node_id.as_ref().unwrap() != &request.node_id {
             return Err(Status::not_found(format!(
                 "volume is locked to node {}, cannot move volume through publish",
-                volume.assigned_node_id
+                volume.assigned_node_id.as_ref().unwrap()
             )));
         }
         let Some(capability) = &request.volume_capability else {
@@ -408,7 +335,7 @@ impl Controller for ControllerService {
             return Err(Status::invalid_argument("missing volume_id"));
         }
 
-        let mut volume = match store::Volume::load(request.volume_id).await {
+        let mut volume = match store::Volume::load(&request.volume_id).await {
             Ok(Some(x)) => x,
             Ok(None) => return Ok(Response::new(ControllerUnpublishVolumeResponse {})),
             // Ok(None) => return Err(Status::not_found("volume_id not found")),
@@ -452,7 +379,7 @@ impl Controller for ControllerService {
             return Err(Status::invalid_argument("no capabilities specified"));
         }
 
-        let volume = match store::Volume::load(request.volume_id).await {
+        let volume = match store::Volume::load(&request.volume_id).await {
             Ok(Some(x)) => x,
             Ok(None) => return Err(Status::not_found("volume_id not found")),
             Err(e) => {
@@ -512,14 +439,12 @@ impl Controller for ControllerService {
                     volume_context: Default::default(),
                     content_source: None,
                     accessible_topology: vec![Topology {
-                        segments: [("node".to_string(), volume.assigned_node_id.clone())]
-                            .into_iter()
-                            .collect(),
+                        segments: volume.assigned_node_id.clone().map(|x| [("node".to_string(), x)].into_iter().collect()).unwrap_or_default(),
                     }],
                 }),
                 status: Some(VolumeStatus {
                     published_node_ids: if matches!(volume.state, VolumeState::NodePublished) {
-                        vec![volume.assigned_node_id]
+                        vec![volume.assigned_node_id.unwrap_or_default()]
                     } else {
                         vec![]
                     },
@@ -693,7 +618,7 @@ impl Controller for ControllerService {
             return Err(Status::invalid_argument("missing volume_id"));
         }
 
-        let volume = match store::Volume::load(request.volume_id).await {
+        let volume = match store::Volume::load(&request.volume_id).await {
             Ok(Some(x)) => x,
             Ok(None) => return Err(Status::not_found("volume_id not found")),
             Err(e) => {
@@ -707,14 +632,12 @@ impl Controller for ControllerService {
             volume_context: Default::default(),
             content_source: None,
             accessible_topology: vec![Topology {
-                segments: [("node".to_string(), volume.assigned_node_id.clone())]
-                    .into_iter()
-                    .collect(),
+                segments: volume.assigned_node_id.clone().map(|x| [("node".to_string(), x)].into_iter().collect()).unwrap_or_default(),
             }],
         };
         let status = crate::proto::controller_get_volume_response::VolumeStatus {
             published_node_ids: if matches!(volume.state, VolumeState::NodePublished) {
-                vec![volume.assigned_node_id]
+                vec![volume.assigned_node_id.unwrap_or_default()]
             } else {
                 vec![]
             },

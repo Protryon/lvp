@@ -53,10 +53,14 @@ async fn main() {
         .parse_env(env_logger::Env::default().default_filter_or("info"))
         .init();
     lazy_static::initialize(&CONFIG);
-    lazy_static::initialize(&store::DATABASE);
+    if let Err(e) = store::init_client().await {
+        error!("failed to connect to etcd: {e:#}");
+        std::process::exit(1);
+    }
 
     if let Err(e) = chroot::create().await {
-        error!("failed to create chroot: {e}");
+        error!("failed to create chroot: {e:#}");
+        std::process::exit(1);
     }
 
     let service = Server::builder()

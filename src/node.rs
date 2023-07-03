@@ -1,6 +1,6 @@
 use std::{
     os::fd::AsRawFd,
-    path::{Path, PathBuf},
+    path::{Path, PathBuf}, io::ErrorKind,
 };
 
 use crate::{
@@ -14,8 +14,9 @@ use crate::{
     store::{self, Filesystem, VolumeMode, VolumeState},
 };
 use anyhow::Result;
+use futures::TryFutureExt;
 use log::{error, info};
-use tokio::fs::OpenOptions;
+use tokio::{fs::{OpenOptions, File}, process::Command};
 use tonic::{Request, Response, Status};
 
 #[derive(Debug)]
@@ -105,6 +106,54 @@ async fn expand_volume(
     Ok(())
 }
 
+async fn make_volume(path: &Path, size: u64, filesystem: Filesystem) -> std::io::Result<()> {
+    if tokio::fs::try_exists(path).await? {
+        return Err(std::io::Error::new(
+            ErrorKind::AlreadyExists,
+            "volume file already exists",
+        ));
+    }
+    if filesystem == Filesystem::Bind {
+        tokio::fs::create_dir_all(path).await?;
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let file = File::create(path).await?;
+    tokio::task::spawn_blocking(move || {
+        if unsafe { libc::ftruncate(file.as_raw_fd(), size as i64) } < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    })
+    .await??;
+    match filesystem {
+        Filesystem::Ext4 => {
+            let status = Command::new("mkfs.ext4").arg(path).spawn()?.wait().await?;
+            if !status.success() {
+                return Err(std::io::Error::new(
+                    ErrorKind::Other,
+                    &*format!("mkfs.ext4 exited with status {status}"),
+                ));
+            }
+        }
+        Filesystem::Xfs => {
+            let status = Command::new("mkfs.xfs").arg(path).spawn()?.wait().await?;
+            if !status.success() {
+                return Err(std::io::Error::new(
+                    ErrorKind::Other,
+                    &*format!("mkfs.xfs exited with status {status}"),
+                ));
+            }
+        }
+        Filesystem::Bind => unreachable!(),
+    }
+
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl Node for NodeService {
     async fn node_stage_volume(
@@ -146,7 +195,7 @@ impl Node for NodeService {
         };
         let (requested_config, requested_filesystem) = parse_volume_capability(capability)?;
 
-        let mut volume = match store::Volume::load(request.volume_id).await {
+        let mut volume = match store::Volume::load(&request.volume_id).await {
             Ok(Some(x)) => x,
             Ok(None) => return Err(Status::not_found("volume_id not found")),
             Err(e) => {
@@ -161,6 +210,13 @@ impl Node for NodeService {
                 .unwrap_or_default()
         {
             return Err(Status::already_exists("incompatible volume_capability"));
+        }
+
+        if volume.assigned_node_id.is_some() && volume.assigned_node_id.as_ref().unwrap() != &*NODE {
+            return Err(Status::not_found(format!(
+                "volume is locked to node {}, cannot move volume through publish",
+                volume.assigned_node_id.as_ref().unwrap()
+            )));
         }
 
         match volume.state {
@@ -207,6 +263,26 @@ impl Node for NodeService {
             &volume.host_path
         };
         let total_path = CONFIG.host_prefix.join(host_path);
+
+        if !tokio::fs::try_exists(&total_path).map_err(|e| {
+            error!("failed to check volume existance: {e}");
+            Status::internal("failed to check volume existance")
+        }).await? {
+            info!("making new volume @ '{}'", total_path.display());
+            if let Err(e) = make_volume(&total_path, volume.size, volume.filesystem).await {
+                error!(
+                    "failed to make new volume file: {e:#} @ {}",
+                    total_path.display()
+                );
+    
+                return Err(Status::internal("internal failure"));
+            }
+            volume.assigned_node_id = Some(NODE.clone());
+            if let Err(e) = volume.update().await {
+                error!("failed to save assigned_node_id: {e:#}");
+                return Err(Status::internal("internal failure"));
+            }
+        }
 
         let loop_device = match mount_volume(
             volume.loop_device.as_deref(),
@@ -255,7 +331,7 @@ impl Node for NodeService {
             return Err(Status::invalid_argument("missing target_path"));
         }
 
-        let mut volume = match store::Volume::load(request.volume_id).await {
+        let mut volume = match store::Volume::load(&request.volume_id).await {
             Ok(Some(x)) => x,
             Ok(None) => return Err(Status::not_found("volume_id not found")),
             Err(e) => {
@@ -310,7 +386,7 @@ impl Node for NodeService {
             return Err(Status::invalid_argument("volume_path not found"));
         }
 
-        let volume = match store::Volume::load(request.volume_id).await {
+        let volume = match store::Volume::load(&request.volume_id).await {
             Ok(Some(x)) => x,
             Ok(None) => return Err(Status::not_found("volume_id not found")),
             Err(e) => {
@@ -372,7 +448,7 @@ impl Node for NodeService {
             return Err(Status::invalid_argument("volume_path not found"));
         }
 
-        let mut volume = match store::Volume::load(request.volume_id).await {
+        let mut volume = match store::Volume::load(&request.volume_id).await {
             Ok(Some(x)) => x,
             Ok(None) => return Err(Status::not_found("volume_id not found")),
             Err(e) => {
@@ -460,7 +536,9 @@ impl Node for NodeService {
             node_id: NODE.clone(),
             max_volumes_per_node: 0,
             accessible_topology: Some(Topology {
-                segments: CONFIG.topology.clone(),
+                segments: [("node".to_string(), NODE.clone())]
+                .into_iter()
+                .collect(),
             }),
         }))
     }

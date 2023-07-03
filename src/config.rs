@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,9 @@ lazy_static::lazy_static! {
             env_var
         }
     };
+    pub static ref NAMESPACE: String = {
+        std::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/namespace").expect("failed to read K8S namespace, is the service account linked?").trim().to_string()
+    };
 }
 
 #[derive(Serialize, Deserialize)]
@@ -27,6 +30,4 @@ pub struct Config {
     pub socket_path: PathBuf,
     pub database: PathBuf,
     pub host_prefix: PathBuf,
-    #[serde(default)]
-    pub topology: HashMap<String, String>,
 }

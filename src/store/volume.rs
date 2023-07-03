@@ -1,16 +1,20 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, collections::BTreeMap};
 
-use anyhow::Result;
-use redb::{ReadableTable, TableDefinition, TableError};
+use anyhow::{Result, Context};
+use k8s_openapi::api::core::v1::ConfigMap;
+use kube::{Api, core::ObjectMeta, api::Patch};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-use super::DATABASE;
+use crate::config::NAMESPACE;
+
+use super::CLIENT;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Volume {
     pub name: String,
     pub size: u64,
-    pub assigned_node_id: String,
+    pub assigned_node_id: Option<String>,
     pub state: VolumeState,
     pub published_readonly: bool,
     pub published_config: Option<VolumeConfig>,
@@ -53,97 +57,72 @@ pub enum VolumeMode {
     SingleNodeMultiWriter,
 }
 
-const TABLE: TableDefinition<&str, &str> = TableDefinition::new("volumes");
-
 pub enum VolumeCreation {
     AlreadyExists,
     Success,
 }
 
 impl Volume {
+    fn key(&self) -> String {
+        format!("lvp-vol-{}", self.name)
+    }
+
     pub async fn create(&self) -> Result<VolumeCreation> {
         let serialized = serde_json::to_string(&self)?;
-        let name = self.name.clone();
-        Ok(
-            tokio::task::spawn_blocking(move || -> Result<VolumeCreation> {
-                let txn = DATABASE.begin_write()?;
-                {
-                    let mut table = txn.open_table(TABLE)?;
-                    if table.get(&*name)?.is_some() {
-                        return Ok(VolumeCreation::AlreadyExists);
-                    }
-                    table.insert(&*name, &*serialized)?;
-                }
-                txn.commit()?;
-                Ok(VolumeCreation::Success)
-            })
-            .await??,
-        )
+        let key = self.key();
+        let configs: Api<ConfigMap> = Api::default_namespaced(CLIENT.clone());
+        if configs.get_opt(&key).await?.is_some() {
+            return Ok(VolumeCreation::AlreadyExists);
+        };
+        let mut data = BTreeMap::new();
+        data.insert("data.json".to_string(), serialized);
+        configs.create(&Default::default(), &ConfigMap {
+            data: Some(data),
+            metadata: ObjectMeta {
+                name: Some(key),
+                namespace: Some(NAMESPACE.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }).await?;
+        Ok(VolumeCreation::Success)
     }
 
     pub async fn update(&self) -> Result<()> {
         let serialized = serde_json::to_string(&self)?;
-        let name = self.name.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let txn = DATABASE.begin_write()?;
-            {
-                let mut table = txn.open_table(TABLE)?;
-                table.insert(&*name, &*serialized)?;
-            }
-            txn.commit()?;
-            Ok(())
-        })
-        .await??;
+        let key = self.key();
+        let configs: Api<ConfigMap> = Api::default_namespaced(CLIENT.clone());
+        configs.patch(&key, &Default::default(), &Patch::Merge(json!({
+            "data": {
+                "data.json": serialized,
+            },
+        }))).await?;
         Ok(())
     }
 
     pub async fn delete(&self) -> Result<()> {
-        let name = self.name.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            //TODO: validate not in use?
-            let txn = DATABASE.begin_write()?;
-            {
-                let mut table = txn.open_table(TABLE)?;
-                table.remove(&*name)?;
-            }
-            txn.commit()?;
-            Ok(())
-        })
-        .await??;
+        let configs: Api<ConfigMap> = Api::default_namespaced(CLIENT.clone());
+        configs.delete(&self.key(), &Default::default()).await?;
         Ok(())
     }
 
-    pub async fn load(name: String) -> Result<Option<Self>> {
-        tokio::task::spawn_blocking(move || -> Result<Option<Self>> {
-            let txn = DATABASE.begin_read()?;
-            let table = match txn.open_table(TABLE) {
-                Ok(x) => x,
-                Err(TableError::TableDoesNotExist(_)) => return Ok(None),
-                Err(e) => return Err(e.into()),
-            };
-            let Some(raw) = table.get(&*name)? else {
-                return Ok(None);
-            };
-            Ok(Some(serde_json::from_str(raw.value())?))
-        })
-        .await?
+    pub async fn load(name: &str) -> Result<Option<Self>> {
+        let configs: Api<ConfigMap> = Api::default_namespaced(CLIENT.clone());
+        let Some(config) = configs.get_opt(&format!("lvp-vol-{name}")).await? else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_str(config.data.context("no data")?.get("data.json").context("missing data.json")?)?)
     }
 
     pub async fn list() -> Result<Vec<Self>> {
-        tokio::task::spawn_blocking(move || -> Result<Vec<Self>> {
-            let txn = DATABASE.begin_read()?;
-            let table = match txn.open_table(TABLE) {
-                Ok(x) => x,
-                Err(TableError::TableDoesNotExist(_)) => return Ok(vec![]),
-                Err(e) => return Err(e.into()),
-            };
-            let mut out = vec![];
-            for range in table.iter()? {
-                let (_, value) = range?;
-                out.push(serde_json::from_str(value.value())?);
+        let configs: Api<ConfigMap> = Api::default_namespaced(CLIENT.clone());
+        let mut out = vec![];
+        for config in configs.list(&Default::default()).await? {
+            if !config.metadata.name.as_deref().unwrap_or_default().starts_with("lvp-vol-") {
+                continue;
             }
-            Ok(out)
-        })
-        .await?
+            out.push(serde_json::from_str(config.data.context("no data")?.get("data.json").context("missing data.json")?)?);
+        }
+        Ok(out)
     }
 }

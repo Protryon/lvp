@@ -21,7 +21,7 @@ spec:
         - name: regkey
       containers:
       - name: lvp
-        image: protryon/lvp:1.1.0
+        image: protryon/lvp:1.2.0
         imagePullPolicy: Always
         securityContext:
           privileged: true

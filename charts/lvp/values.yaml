@@ -11,4 +11,5 @@ resources:
 databaseDir: /var/lib/lvp/
 sourcePath: /lvp
 kubeletPath: /var/lib/kubelet
+pkiPath: /etc/kubernetes/pki
 enableSanity: false
