@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     chroot::{run, run_in_chroot},
-    config::CONFIG,
+    config::{CONFIG, NODE},
     controller::parse_volume_capability,
     proto::{
         node_server::Node, node_service_capability::rpc::Type as RpcType,
@@ -457,7 +457,7 @@ impl Node for NodeService {
         _request: Request<NodeGetInfoRequest>,
     ) -> Result<Response<NodeGetInfoResponse>, Status> {
         Ok(Response::new(NodeGetInfoResponse {
-            node_id: CONFIG.node_id.clone(),
+            node_id: NODE.clone(),
             max_volumes_per_node: 0,
             accessible_topology: Some(Topology {
                 segments: CONFIG.topology.clone(),

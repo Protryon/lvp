@@ -8,6 +8,5 @@ metadata:
 data:
   config.yaml: |
     socket_path: /csi/csi.sock
-    node_id: {{ .Values.nodeId }}
     database: /db/lvp.redb
     host_prefix: /host/

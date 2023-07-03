@@ -12,12 +12,19 @@ lazy_static::lazy_static! {
         }
     };
     pub static ref CONFIG: Config = serde_yaml::from_str(&std::fs::read_to_string(&*CONFIG_PATH).expect("failed to read config")).expect("failed to parse config");
+    pub static ref NODE: String = {
+        let env_var = std::env::var("NODE").unwrap_or_default();
+        if env_var.is_empty() {
+            std::fs::read_to_string("/etc/hostname").ok().unwrap_or_else(|| "unknown".to_string())
+        } else {
+            env_var
+        }
+    };
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct Config {
     pub socket_path: PathBuf,
-    pub node_id: String,
     pub database: PathBuf,
     pub host_prefix: PathBuf,
     #[serde(default)]

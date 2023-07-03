@@ -8,7 +8,6 @@ resources:
     memory: 256Mi
     cpu: 250m
 
-nodeId: local
 databaseDir: /var/lib/lvp/
 sourcePath: /lvp
 kubeletPath: /var/lib/kubelet

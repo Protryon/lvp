@@ -1,13 +1,11 @@
 apiVersion: apps/v1
-kind: StatefulSet
+kind: DaemonSet
 metadata:
   name: lvp
   labels:
     app: lvp
     {{- include "lvp.labels" . | nindent 4 }}
 spec:
-  serviceName: lvp
-  replicas: 1
   selector:
     matchLabels:
       app: lvp
@@ -51,6 +49,10 @@ spec:
         env:
         - name: LVP_CONFIG
           value: /config/config.yaml
+        - name: NODE
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         volumeMounts:
         - name: config
           mountPath: /config

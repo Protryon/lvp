@@ -5,7 +5,7 @@ use tokio::{fs::File, process::Command};
 use tonic::{Request, Response, Status};
 
 use crate::{
-    config::CONFIG,
+    config::{CONFIG, NODE},
     proto::{
         controller_server::Controller,
         controller_service_capability::rpc::Type as RpcType,
@@ -132,7 +132,7 @@ impl Controller for ControllerService {
         if let Some(requirements) = &request.accessibility_requirements {
             for requirement in &requirements.requisite {
                 for (key, value) in &requirement.segments {
-                    if key != "node" || value != &CONFIG.node_id {
+                    if key != "node" || value != &*NODE {
                         return Err(Status::resource_exhausted(
                             "invalid accessibility_requirements, only allowed node=<node id>",
                         ));
@@ -199,7 +199,7 @@ impl Controller for ControllerService {
                 None => 1073741824, // 1 GiB
                 Some(capacity) => capacity.required_bytes as u64,
             },
-            assigned_node_id: CONFIG.node_id.clone(),
+            assigned_node_id: NODE.clone(),
             state: VolumeState::Open,
             published_readonly: false,
             published_config: None,
@@ -546,7 +546,7 @@ impl Controller for ControllerService {
 
         if let Some(requirement) = &request.accessible_topology {
             for (key, value) in &requirement.segments {
-                if key != "node" || value != &CONFIG.node_id {
+                if key != "node" || value != &*NODE {
                     return Err(Status::resource_exhausted(
                         "invalid accessibility_requirements, only allowed node=<node id>",
                     ));

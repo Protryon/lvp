@@ -52,7 +52,6 @@
         "type": "object"
       },
       "databaseDir": { "type": "string" },
-      "nodeId": { "type": "string" },
       "kubeletPath": { "type": "string" },
       "enableSanity": { "type": "boolean" }
     }
