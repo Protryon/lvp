@@ -49,7 +49,7 @@ async fn mount_volume(
         // }
         output.into()
     };
-    let mut mount_args = vec!["mount", "-o", "remount"];
+    let mut mount_args = vec!["mount"];
     if is_readonly {
         mount_args.push("-r");
     }
