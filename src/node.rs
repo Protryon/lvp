@@ -1,11 +1,10 @@
 use std::{
-    io::ErrorKind,
     os::fd::AsRawFd,
     path::{Path, PathBuf},
-    process::Stdio,
 };
 
 use crate::{
+    chroot::{run, run_in_chroot},
     config::CONFIG,
     controller::parse_volume_capability,
     proto::{
@@ -14,8 +13,9 @@ use crate::{
     },
     store::{self, Filesystem, VolumeMode, VolumeState},
 };
+use anyhow::Result;
 use log::{error, info};
-use tokio::{fs::OpenOptions, process::Command};
+use tokio::fs::OpenOptions;
 use tonic::{Request, Response, Status};
 
 #[derive(Debug)]
@@ -27,115 +27,45 @@ async fn mount_volume(
     target: &Path,
     is_readonly: bool,
     filesystem: Filesystem,
-) -> std::io::Result<Option<PathBuf>> {
+) -> Result<Option<PathBuf>> {
     if filesystem == Filesystem::Bind {
-        let mut mount_args = vec![];
+        let mut mount_args = vec!["mount", "bind"];
         if is_readonly {
             mount_args.push("-r");
         }
-        let output = Command::new("mount")
-            .arg("--bind")
-            .args(mount_args)
-            .arg(source)
-            .arg(target)
-            .spawn()?
-            .wait()
-            .await?;
-        if !output.success() {
-            return Err(std::io::Error::new(
-                ErrorKind::Other,
-                &*format!(
-                    "mount exited with code {}",
-                    output.code().unwrap_or_default()
-                ),
-            ));
-        }
+        mount_args.push(source.to_str().unwrap());
+        mount_args.push(target.to_str().unwrap());
+        run(&mount_args).await?;
         return Ok(None);
     }
     let loop_device = if let Some(device) = loop_device {
         device.to_path_buf()
     } else {
-        let output = Command::new("losetup")
-            .arg("--show")
-            .arg("-L")
-            .arg("-f")
-            .arg(source)
-            .stdout(Stdio::piped())
-            .spawn()?
-            .wait_with_output()
-            .await?;
-        if !output.status.success() {
-            return Err(std::io::Error::new(
-                ErrorKind::Other,
-                &*format!(
-                    "losetup exited with code {}",
-                    output.status.code().unwrap_or_default()
-                ),
-            ));
-        }
-        let pipe = String::from_utf8(output.stdout)
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        info!("losetup pipe: {pipe}");
-        if !tokio::fs::try_exists(&pipe).await? {
-            return Err(std::io::Error::new(ErrorKind::Other, "failed to find pipe"));
-        }
-        pipe.into()
+        let output =
+            run_in_chroot(&["losetup", "--show", "-L", "-f", source.to_str().unwrap()]).await?;
+        info!("losetup pipe: {output}");
+        // if !tokio::fs::try_exists(&pipe).await? {
+        //     return Err(std::io::Error::new(ErrorKind::Other, "failed to find pipe"));
+        // }
+        output.into()
     };
-    let mut mount_args = vec![];
+    let mut mount_args = vec!["mount", "-o", "remount"];
     if is_readonly {
         mount_args.push("-r");
     }
-    let output = Command::new("mount")
-        .args(mount_args)
-        .arg(&loop_device)
-        .arg(target)
-        .spawn()?
-        .wait()
-        .await?;
-    if !output.success() {
-        return Err(std::io::Error::new(
-            ErrorKind::Other,
-            &*format!(
-                "mount exited with code {}",
-                output.code().unwrap_or_default()
-            ),
-        ));
-    }
+    mount_args.push(loop_device.to_str().unwrap());
+    mount_args.push(target.to_str().unwrap());
+    run_in_chroot(&mount_args).await?;
     Ok(Some(loop_device))
 }
 
-async fn unloop_volume(target: &Path) -> std::io::Result<()> {
-    let output = Command::new("losetup")
-        .arg("-d")
-        .arg(target)
-        .spawn()?
-        .wait()
-        .await?;
-    if !output.success() {
-        return Err(std::io::Error::new(
-            ErrorKind::Other,
-            &*format!(
-                "losetup -d exited with code {}",
-                output.code().unwrap_or_default()
-            ),
-        ));
-    }
+async fn unloop_volume(target: &Path) -> Result<()> {
+    run_in_chroot(&["losetup", "-d", target.to_str().unwrap()]).await?;
     Ok(())
 }
 
-async fn unmount_volume(target: &Path) -> std::io::Result<()> {
-    let output = Command::new("umount").arg(target).spawn()?.wait().await?;
-    if !output.success() {
-        return Err(std::io::Error::new(
-            ErrorKind::Other,
-            &*format!(
-                "umount exited with code {}",
-                output.code().unwrap_or_default()
-            ),
-        ));
-    }
+async fn unmount_volume(target: &Path) -> Result<()> {
+    run_in_chroot(&["umount", target.to_str().unwrap()]).await?;
     Ok(())
 }
 
@@ -144,7 +74,7 @@ async fn expand_volume(
     loop_device: &Path,
     size: u64,
     filesystem: Filesystem,
-) -> std::io::Result<()> {
+) -> Result<()> {
     if filesystem == Filesystem::Bind {
         return Ok(());
     }
@@ -159,47 +89,15 @@ async fn expand_volume(
     })
     .await??;
     // expand loop device
-    let status = Command::new("losetup")
-        .arg("-c")
-        .arg(loop_device)
-        .spawn()?
-        .wait()
-        .await?;
-    if !status.success() {
-        return Err(std::io::Error::new(
-            ErrorKind::Other,
-            &*format!("losetup -c exited with status {status}"),
-        ));
-    }
+    run_in_chroot(&["losetup", "-c", loop_device.to_str().unwrap()]).await?;
 
     // expand filesystem
     match filesystem {
         Filesystem::Ext4 => {
-            let status = Command::new("resize2fs")
-                .arg(loop_device)
-                .spawn()?
-                .wait()
-                .await?;
-            if !status.success() {
-                return Err(std::io::Error::new(
-                    ErrorKind::Other,
-                    &*format!("resize2fs exited with status {status}"),
-                ));
-            }
+            run(&["resize2fs", loop_device.to_str().unwrap()]).await?;
         }
         Filesystem::Xfs => {
-            let status = Command::new("xfs_growfs")
-                .arg("-d")
-                .arg(loop_device)
-                .spawn()?
-                .wait()
-                .await?;
-            if !status.success() {
-                return Err(std::io::Error::new(
-                    ErrorKind::Other,
-                    &*format!("xfs_growfs exited with status {status}"),
-                ));
-            }
+            run(&["xfs_growfs", "-d", loop_device.to_str().unwrap()]).await?;
         }
         Filesystem::Bind => (),
     }
@@ -303,7 +201,12 @@ impl Node for NodeService {
             return Err(Status::internal("failed to create volume mountdir"));
         }
 
-        let total_path = CONFIG.host_prefix.join(&volume.host_path);
+        let host_path = if volume.host_path.starts_with("/") {
+            &volume.host_path[1..]
+        } else {
+            &volume.host_path
+        };
+        let total_path = CONFIG.host_prefix.join(host_path);
 
         let loop_device = match mount_volume(
             volume.loop_device.as_deref(),

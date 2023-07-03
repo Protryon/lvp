@@ -184,16 +184,13 @@ impl Controller for ControllerService {
         {
             return Err(Status::invalid_argument(format!("invalid volume name")));
         }
-        let host_base_path = if host_base_path.ends_with("/") {
-            &host_base_path[..host_base_path.len() - 1]
-        } else {
-            &host_base_path
-        };
-        let host_base_path = if host_base_path.starts_with("/") {
-            &host_base_path[1..]
-        } else {
-            &host_base_path
-        };
+        let mut host_base_path = &*host_base_path;
+        while host_base_path.ends_with("/") {
+            host_base_path = &host_base_path[..host_base_path.len() - 1];
+        }
+        while host_base_path.starts_with("/") {
+            host_base_path = &host_base_path[1..];
+        }
         let host_path = format!("{}/{}", host_base_path, request.name);
 
         let new_volume = store::Volume {
@@ -251,7 +248,13 @@ impl Controller for ControllerService {
         }
         //TODO: validate volume size?
 
-        let total_path = CONFIG.host_prefix.join(&new_volume.host_path);
+        let host_path = if new_volume.host_path.starts_with("/") {
+            &new_volume.host_path[1..]
+        } else {
+            &new_volume.host_path
+        };
+
+        let total_path = CONFIG.host_prefix.join(host_path);
         info!("making new volume @ '{}'", total_path.display());
         if let Err(e) = make_volume(&total_path, new_volume.size, filesystem).await {
             error!(

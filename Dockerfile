@@ -31,7 +31,7 @@ RUN cargo build --release -p lvp && mv /build/target/release/lvp /build/target/l
 FROM debian:buster-slim
 WORKDIR /runtime
 
-RUN apt-get update && apt-get install libssl1.1 ca-certificates xfsprogs -y && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install libssl1.1 ca-certificates xfsprogs strace -y && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/lvp /runtime/lvp
 

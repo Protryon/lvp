@@ -17,11 +17,12 @@ use futures::Stream;
 use hyper::server::accept::Accept;
 use hyper_unix_connector::UnixConnector;
 use identity::IdentityService;
-use log::info;
+use log::{error, info};
 use node::NodeService;
 use tokio::net::{UnixListener, UnixStream};
 use tonic::transport::Server;
 
+mod chroot;
 mod config;
 mod controller;
 mod identity;
@@ -53,6 +54,10 @@ async fn main() {
         .init();
     lazy_static::initialize(&CONFIG);
     lazy_static::initialize(&store::DATABASE);
+
+    if let Err(e) = chroot::create().await {
+        error!("failed to create chroot: {e}");
+    }
 
     let service = Server::builder()
         .tcp_keepalive(Some(Duration::from_secs(5)))

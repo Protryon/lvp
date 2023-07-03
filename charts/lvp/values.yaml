@@ -10,5 +10,6 @@ resources:
 
 nodeId: local
 databaseDir: /var/lib/lvp/
+sourcePath: /lvp
 kubeletPath: /var/lib/kubelet
 enableSanity: false

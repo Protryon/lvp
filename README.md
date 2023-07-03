@@ -18,7 +18,7 @@ I recommend installing via the Helm chart.
 
 ```
 helm upgrade --install lvp oci://registry-1.docker.io/protryon/lvp \
-  --version 1.0.0 --set nodeId=local \
+  --version 1.1.0 --set nodeId=local \
   --namespace lvp --create-namespace
 ```
 

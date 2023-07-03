@@ -57,7 +57,7 @@ spec:
         - name: plugin-dir
           mountPath: /csi
         - name: mountpoint-dir
-          mountPath: /var/lib/kubelet/pods/
+          mountPath: {{ .Values.kubeletPath }}/pods/
           mountPropagation: "Bidirectional"
         - name: data-dir
           mountPath: /db
@@ -69,7 +69,7 @@ spec:
           privileged: true
         args:
           - "--csi-address=/csi/csi.sock"
-          - "--kubelet-registration-path=/var/lib/kubelet/plugins/lvp/csi.sock"
+          - "--kubelet-registration-path={{ .Values.kubeletPath }}/plugins/lvp/csi.sock"
           - "--http-endpoint=:9809"
         volumeMounts:
           - name: plugin-dir
@@ -127,7 +127,7 @@ spec:
           type: DirectoryOrCreate
       - name: source-dir
         hostPath:
-          path: /
+          path: {{ .Values.sourcePath }}
           type: Directory
       - name: mountpoint-dir
         hostPath:
